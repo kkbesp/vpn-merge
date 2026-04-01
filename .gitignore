@@ -1,0 +1,6 @@
+vpn-config.json
+shadowrocket.conf
+worker.js
+node_modules/
+wgcf-*
+.wrangler/

@@ -1,0 +1,288 @@
+#!/bin/bash
+# VPN Manager — подписки, пинг-таргеты, WARP-домены
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG="$SCRIPT_DIR/vpn-config.json"
+GENERATOR="$SCRIPT_DIR/vpn-generate.py"
+WORKER_DIR="$SCRIPT_DIR/worker"
+
+G='\033[32m' R='\033[31m' Y='\033[33m' C='\033[36m' M='\033[35m'
+B='\033[1m' D='\033[2m' N='\033[0m'
+
+if [[ ! -f "$CONFIG" ]]; then
+  echo -e "${R}Конфиг не найден. Запусти ./install.sh${N}"
+  exit 1
+fi
+
+# Читаем worker URL из конфига
+WORKER_URL=$(python3 -c "import json;print(json.load(open('$CONFIG')).get('worker_url',''))" 2>/dev/null)
+if [[ -z "$WORKER_URL" ]]; then
+  echo -e "${R}worker_url не задан. Запусти ./install.sh${N}"
+  exit 1
+fi
+
+# ─── Спиннер ───
+spin_pid=""
+spinner() {
+  local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+  local msg="$1" i=0
+  while true; do
+    printf "\r  ${C}${frames[$i]}${N} ${msg}" >&2
+    i=$(( (i + 1) % ${#frames[@]} ))
+    sleep 0.08
+  done
+}
+start_spin() { spinner "$1" & spin_pid=$!; disown $spin_pid; }
+stop_spin() { [[ -n "$spin_pid" ]] && kill "$spin_pid" 2>/dev/null; spin_pid=""; printf "\r\033[K" >&2; }
+
+# ─── UI ───
+hr() { echo -e "${D}  ──────────────────────────────────────────${N}"; }
+
+show() {
+  clear
+  echo ""
+  echo -e "  ${B}${C}⚡ VPN Manager${N}"
+  hr
+
+  echo -e "\n  ${B}📡 Подписки${N}"
+  local subs=$(python3 -c "
+import json;d=json.load(open('$CONFIG'))
+for i,s in enumerate(d['subscriptions']):
+  domain=s.split('//')[1].split('/')[0] if '//' in s else s
+  print(f'     ${G}{i+1}${N}  {domain}  ${D}{s}${N}')
+" 2>/dev/null)
+  [[ -z "$subs" ]] && echo -e "     ${D}(пусто — добавь через 1)${N}" || echo -e "$subs"
+
+  echo -e "\n  ${B}🎯 Пинг-таргеты${N}"
+  local pings=$(python3 -c "
+import json;d=json.load(open('$CONFIG'))
+icons={'telegram':'💬','claude':'🤖','google':'🟢','instagram':'📸','gemini':'✨','meet':'📹','youtube':'▶️','twitter':'🐦','x.com':'🐦'}
+for i,s in enumerate(d['ping_targets']):
+  domain=s.split('//')[1].split('/')[0] if '//' in s else s
+  icon='🌐'
+  for k,v in icons.items():
+    if k in s.lower(): icon=v; break
+  print(f'     ${G}{i+1}${N}  {icon} {domain}')
+" 2>/dev/null)
+  [[ -z "$pings" ]] && echo -e "     ${D}(пусто)${N}" || echo -e "$pings"
+
+  echo -e "\n  ${B}🔒 WARP-домены${N} ${D}(через Cloudflare, обход гео-блоков)${N}"
+  local warps=$(python3 -c "
+import json;d=json.load(open('$CONFIG'))
+icons={'gemini':'✨','openai':'🤖','chatgpt':'🤖','claude':'🧠','copilot':'🛠','midjourney':'🎨','instagram':'📸','netflix':'🎬','spotify':'🎵'}
+for i,s in enumerate(d.get('warp_domains',[])):
+  icon='🔒'
+  for k,v in icons.items():
+    if k in s.lower(): icon=v; break
+  print(f'     ${G}{i+1}${N}  {icon} {s}')
+" 2>/dev/null)
+  [[ -z "$warps" ]] && echo -e "     ${D}(пусто)${N}" || echo -e "$warps"
+
+  hr
+  echo -e "\n  ${B}🔗 Shadowrocket${N}"
+  echo -e "     Подписка  ${G}${WORKER_URL}/sub${N}"
+  echo -e "     Тест      ${G}${WORKER_URL}/ping${N}"
+  echo -e "     Конфиг    ${G}${WORKER_URL}/conf${N}"
+  echo ""
+  hr
+}
+
+menu() {
+  echo ""
+  echo -e "  ${C}1${N} добавить подписку      ${C}5${N} ${B}деплой${N} 🚀"
+  echo -e "  ${C}2${N} удалить подписку       ${C}6${N} тест пинга"
+  echo -e "  ${C}3${N} добавить пинг-таргет   ${C}7${N} добавить WARP-домен"
+  echo -e "  ${C}4${N} удалить пинг-таргет    ${C}8${N} удалить WARP-домен"
+  echo -e "  ${C}0${N} выход"
+  echo ""
+}
+
+# ─── Подписки ───
+add_sub() {
+  echo ""; read -rp "  URL подписки: " url; [[ -z "$url" ]] && return
+  python3 -c "
+import json;d=json.load(open('$CONFIG'))
+d['subscriptions'].append('''$url''')
+json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)"
+  echo -e "  ${G}✓${N} Добавлено"; sleep 0.5
+}
+
+del_sub() {
+  echo ""; read -rp "  Номер: " n; [[ -z "$n" ]] && return
+  python3 -c "
+import json;d=json.load(open('$CONFIG'))
+i=int('$n')-1
+if 0<=i<len(d['subscriptions']):
+  d['subscriptions'].pop(i);json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
+  print('  \033[32m✓\033[0m Удалено')
+else: print('  \033[31m✗\033[0m Нет такого номера')"
+  sleep 0.5
+}
+
+# ─── Пинг ───
+add_ping() {
+  echo ""
+  echo -e "  ${D}Примеры: https://t.me/  https://claude.ai/api/health${N}"
+  read -rp "  URL: " url; [[ -z "$url" ]] && return
+  python3 -c "
+import json;d=json.load(open('$CONFIG'))
+d['ping_targets'].append('''$url''')
+json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)"
+  echo -e "  ${G}✓${N} Добавлено"; sleep 0.5
+}
+
+del_ping() {
+  echo ""; read -rp "  Номер: " n; [[ -z "$n" ]] && return
+  python3 -c "
+import json;d=json.load(open('$CONFIG'))
+i=int('$n')-1
+if 0<=i<len(d['ping_targets']):
+  d['ping_targets'].pop(i);json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
+  print('  \033[32m✓\033[0m Удалено')
+else: print('  \033[31m✗\033[0m Нет такого номера')"
+  sleep 0.5
+}
+
+# ─── WARP-домены ───
+add_warp() {
+  echo ""
+  echo -e "  ${D}Домен без https:// — например: gemini.google.com${N}"
+  read -rp "  Домен: " domain; [[ -z "$domain" ]] && return
+  domain=$(echo "$domain" | sed 's|https\?://||' | sed 's|/.*||')
+  python3 -c "
+import json;d=json.load(open('$CONFIG'))
+wd=d.setdefault('warp_domains',[])
+if '$domain' not in wd:
+  wd.append('$domain');json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
+  print('  \033[32m✓\033[0m $domain → WARP')
+else: print('  \033[33m~\033[0m Уже есть')"
+  sleep 0.5
+}
+
+del_warp() {
+  echo ""; read -rp "  Номер: " n; [[ -z "$n" ]] && return
+  python3 -c "
+import json;d=json.load(open('$CONFIG'))
+wd=d.get('warp_domains',[])
+i=int('$n')-1
+if 0<=i<len(wd):
+  removed=wd.pop(i);d['warp_domains']=wd
+  json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
+  print(f'  \033[32m✓\033[0m Удалено: {removed}')
+else: print('  \033[31m✗\033[0m Нет такого номера')"
+  sleep 0.5
+}
+
+# ─── Деплой ───
+deploy() {
+  echo ""
+
+  start_spin "Обновляю WARP-ключи + генерирую конфиг..."
+  local gen_output
+  gen_output=$(python3 "$GENERATOR" 2>&1)
+  stop_spin
+  echo "$gen_output" | while read -r line; do echo "  $line"; done
+
+  start_spin "Деплою на Cloudflare..."
+  local output
+  output=$(cd "$WORKER_DIR" && npx wrangler deploy 2>&1)
+  stop_spin
+
+  if echo "$output" | grep -q "Deployed"; then
+    local version=$(echo "$output" | grep "Version ID" | awk '{print $NF}' | cut -c1-8)
+    echo -e "  ${G}✓${N} Задеплоено ${D}(${version}...)${N}"
+  else
+    echo -e "  ${R}✗${N} Ошибка деплоя:"
+    echo "$output" | tail -5
+  fi
+
+  start_spin "Проверяю /ping..."
+  sleep 3
+  local status
+  status=$(curl -s -o /dev/null -w "%{http_code}" "${WORKER_URL}/ping" 2>/dev/null)
+  stop_spin
+  if [[ "$status" == "204" ]]; then
+    echo -e "  ${G}✓${N} /ping → 204 — все сервисы доступны"
+  else
+    echo -e "  ${Y}⚠${N} /ping → ${status}"
+  fi
+
+  start_spin "Проверяю /sub..."
+  local count
+  count=$(curl -s "${WORKER_URL}/sub" | base64 -d 2>/dev/null | wc -l | tr -d ' ')
+  stop_spin
+  if [[ "$count" -gt 0 ]]; then
+    echo -e "  ${G}✓${N} /sub → ${B}${count}${N} серверов"
+  else
+    echo -e "  ${Y}⚠${N} /sub → пусто"
+  fi
+
+  start_spin "Проверяю /conf..."
+  local conf_size
+  conf_size=$(curl -s "${WORKER_URL}/conf" | wc -c | tr -d ' ')
+  stop_spin
+  if [[ "$conf_size" -gt 100 ]]; then
+    echo -e "  ${G}✓${N} /conf → ${conf_size} байт"
+  else
+    echo -e "  ${Y}⚠${N} /conf → пусто"
+  fi
+
+  echo ""
+  echo -e "  ${G}${B}Всё готово!${N} 🎉"
+}
+
+# ─── Тест пинга ───
+test_ping() {
+  echo ""
+  start_spin "Тестирую /ping..."
+  local status
+  status=$(curl -s -o /dev/null -w "%{http_code}" "${WORKER_URL}/ping" 2>/dev/null)
+  stop_spin
+
+  if [[ "$status" == "204" ]]; then
+    echo -e "  ${G}✓${N} Все сервисы доступны"
+  elif [[ "$status" == "502" ]]; then
+    echo -e "  ${R}✗${N} Один или несколько сервисов недоступны"
+  else
+    echo -e "  ${Y}⚠${N} Ответ: ${status}"
+  fi
+
+  echo ""
+  python3 -c "
+import json;d=json.load(open('$CONFIG'))
+for s in d['ping_targets']:
+  domain=s.split('//')[1].split('/')[0] if '//' in s else s
+  print(domain)" 2>/dev/null | while read -r domain; do
+    start_spin "Проверяю ${domain}..."
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "https://${domain}/" 2>/dev/null)
+    stop_spin
+    if [[ "$code" -gt 0 && "$code" -lt 400 ]]; then
+      echo -e "  ${G}✓${N} ${domain} → ${code}"
+    elif [[ "$code" -ge 400 ]]; then
+      echo -e "  ${Y}~${N} ${domain} → ${code} ${D}(доступен)${N}"
+    else
+      echo -e "  ${R}✗${N} ${domain} → недоступен"
+    fi
+  done
+  sleep 0.5
+}
+
+# ─── Main ───
+while true; do
+  show
+  menu
+  read -rp "  > " choice
+  case $choice in
+    1) add_sub ;;
+    2) del_sub ;;
+    3) add_ping ;;
+    4) del_ping ;;
+    5) deploy; read -rp "  Enter для продолжения..." ;;
+    6) test_ping; read -rp "  Enter для продолжения..." ;;
+    7) add_warp ;;
+    8) del_warp ;;
+    0|q) clear; echo -e "\n  ${C}👋${N}\n"; exit 0 ;;
+    *) echo -e "  ${D}?${N}"; sleep 0.3 ;;
+  esac
+done

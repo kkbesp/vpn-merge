@@ -45,6 +45,12 @@ fi
 check python3 || { echo -e "  ${R}Установи python3${N}"; exit 1; }
 check curl || { echo -e "  ${R}Установи curl${N}"; exit 1; }
 
+if ! check node; then
+  echo -e "  ${Y}→${N} Устанавливаю Node.js..."
+  brew install node
+  echo -e "  ${G}✓${N} Node.js установлен"
+fi
+
 if ! check wgcf; then
   echo -e "  ${Y}→${N} Устанавливаю wgcf..."
   brew install wgcf

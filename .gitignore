@@ -6,4 +6,5 @@ deno-worker/
 node_modules/
 wgcf-*
 .wrangler/
+wrangler.toml
 worker/

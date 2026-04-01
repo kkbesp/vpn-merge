@@ -305,11 +305,15 @@ async function handleMerge() {{
   const results = await Promise.allSettled(
     SUBSCRIPTIONS.map(async (subUrl) => {{
       const res = await fetch(subUrl, {{
-        headers: {{ 'User-Agent': 'Shadowrocket/2070 CFNetwork/1568.100.1' }},
+        headers: {{
+          'User-Agent': 'Shadowrocket/2070 CFNetwork/1568.100.1',
+          'Accept-Encoding': 'identity',
+        }},
         redirect: 'follow',
       }});
       if (!res.ok) return [];
       const text = await res.text();
+      if (!text || text.trim().length === 0) return [];
       return decodeSubscription(text);
     }}),
   );

@@ -1,7 +1,5 @@
 #!/bin/bash
-# Установка VPN Manager
-
-set -e
+set -euo pipefail
 
 G='\033[32m' R='\033[31m' Y='\033[33m' C='\033[36m'
 B='\033[1m' D='\033[2m' N='\033[0m'
@@ -15,137 +13,116 @@ echo -e "  ${B}${C}⚡ VPN Manager — Установка${N}"
 echo -e "  ${D}──────────────────────────────────────────${N}"
 echo ""
 
-# ─── 1. Зависимости ───
+# ─── Утилиты ───
 
-check() {
-  if command -v "$1" &>/dev/null; then
-    echo -e "  ${G}✓${N} $1"
-    return 0
-  else
-    echo -e "  ${Y}✗${N} $1 — не найден"
-    return 1
+ok()   { echo -e "  ${G}✓${N} $1"; }
+warn() { echo -e "  ${Y}⚠${N} $1"; }
+fail() { echo -e "  ${R}✗${N} $1"; exit 1; }
+step() { echo -e "  ${Y}→${N} $1"; }
+
+has() { command -v "$1" &>/dev/null; }
+
+# ─── 1. Homebrew ───
+
+# Подхватываем brew если установлен но не в PATH
+[[ -f /opt/homebrew/bin/brew ]] && eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null || true
+[[ -f /usr/local/bin/brew ]] && eval "$(/usr/local/bin/brew shellenv)" 2>/dev/null || true
+
+if ! has brew; then
+  step "Устанавливаю Homebrew..."
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || fail "Не удалось установить Homebrew"
+  [[ -f /opt/homebrew/bin/brew ]] && eval "$(/opt/homebrew/bin/brew shellenv)"
+  [[ -f /usr/local/bin/brew ]] && eval "$(/usr/local/bin/brew shellenv)"
+fi
+has brew && ok "Homebrew" || fail "Homebrew не установлен"
+
+# ─── 2. Зависимости через brew ───
+
+for pkg in python3 node deno wgcf; do
+  if ! has "$pkg"; then
+    step "Устанавливаю ${pkg}..."
+    case "$pkg" in
+      python3) brew install python ;;
+      node)    brew install node ;;
+      deno)    brew install deno ;;
+      wgcf)    brew install wgcf ;;
+    esac
   fi
-}
+  has "$pkg" && ok "$pkg" || fail "$pkg не установлен"
+done
 
-echo -e "  ${B}Проверяю зависимости...${N}"
+has curl && ok "curl" || fail "curl не установлен"
 
-# Homebrew — добавляем в PATH (может быть установлен но не в PATH)
-if [[ -f /opt/homebrew/bin/brew ]]; then
-  eval "$(/opt/homebrew/bin/brew shellenv)"
-elif [[ -f /usr/local/bin/brew ]]; then
-  eval "$(/usr/local/bin/brew shellenv)"
-fi
-
-if ! check brew; then
-  echo -e "  ${Y}→${N} Устанавливаю Homebrew..."
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  if [[ -f /opt/homebrew/bin/brew ]]; then
-    eval "$(/opt/homebrew/bin/brew shellenv)"
-  elif [[ -f /usr/local/bin/brew ]]; then
-    eval "$(/usr/local/bin/brew shellenv)"
-  fi
-  echo -e "  ${G}✓${N} Homebrew установлен"
-fi
-
-check python3 || { echo -e "  ${R}Установи python3${N}"; exit 1; }
-check curl || { echo -e "  ${R}Установи curl${N}"; exit 1; }
-
-if ! check node; then
-  echo -e "  ${Y}→${N} Устанавливаю Node.js..."
-  brew install node
-  echo -e "  ${G}✓${N} Node.js установлен"
-fi
-
-if ! check wgcf; then
-  echo -e "  ${Y}→${N} Устанавливаю wgcf..."
-  brew install wgcf
-  echo -e "  ${G}✓${N} wgcf установлен"
-fi
-
-if ! check wrangler && ! npx wrangler --version &>/dev/null 2>&1; then
-  echo -e "  ${Y}→${N} Устанавливаю wrangler..."
-  mkdir -p "$WORKER_DIR"
-  cd "$WORKER_DIR" && npm install wrangler --save-dev
-  echo -e "  ${G}✓${N} wrangler установлен"
-fi
-
-if ! check deno; then
-  echo -e "  ${Y}→${N} Устанавливаю Deno..."
-  brew install deno
-  echo -e "  ${G}✓${N} Deno установлен"
-fi
-
-echo ""
-
-# ─── 2. Worker directory ───
+# ─── 3. Wrangler ───
 
 mkdir -p "$WORKER_DIR"
 
 if [[ ! -f "$WORKER_DIR/wrangler.toml" ]]; then
-  cat > "$WORKER_DIR/wrangler.toml" << 'EOF'
-name = "sub-merger"
-main = "worker.js"
-compatibility_date = "2024-01-01"
-EOF
+  cp "$SCRIPT_DIR/wrangler.toml" "$WORKER_DIR/wrangler.toml"
 fi
 
-if [[ ! -f "$WORKER_DIR/package.json" ]]; then
-  cd "$WORKER_DIR" && npm install wrangler --save-dev 2>/dev/null
+if ! (cd "$WORKER_DIR" && npx wrangler --version &>/dev/null 2>&1); then
+  step "Устанавливаю wrangler..."
+  (cd "$WORKER_DIR" && npm install wrangler --save-dev 2>&1) || fail "Не удалось установить wrangler"
 fi
+ok "wrangler"
 
-# ─── 3. Cloudflare авторизация ───
+# ─── 4. Авторизация Cloudflare ───
 
-echo -e "  ${B}Авторизация в Cloudflare${N}"
-
-if ! cd "$WORKER_DIR" && npx wrangler whoami 2>&1 | grep -q "logged in"; then
-  echo -e "  ${Y}→${N} Откроется браузер — нажми Allow"
-  echo ""
-  cd "$WORKER_DIR" && npx wrangler login
-fi
-
-echo -e "  ${G}✓${N} Авторизован"
 echo ""
+if ! (cd "$WORKER_DIR" && npx wrangler whoami 2>&1 | grep -q "logged in"); then
+  step "Нужна авторизация в Cloudflare — откроется браузер"
+  (cd "$WORKER_DIR" && npx wrangler login) || fail "Не удалось авторизоваться"
+fi
+ok "Cloudflare авторизован"
 
-# ─── 4. Конфиг ───
+# ─── 5. Конфиг ───
 
-if [[ -f "$CONFIG" ]]; then
-  echo -e "  ${G}✓${N} vpn-config.json уже существует"
-else
+echo ""
+if [[ ! -f "$CONFIG" ]]; then
   cp "$SCRIPT_DIR/vpn-config.example.json" "$CONFIG"
-  echo -e "  ${G}✓${N} Создан vpn-config.json из шаблона"
+  ok "vpn-config.json создан"
+else
+  ok "vpn-config.json уже есть"
 fi
 
-echo ""
-echo -e "  ${B}Добавь свои VPN-подписки${N}"
-echo -e "  ${D}Вставляй ссылки по одной, пустая строка = готово${N}"
-echo ""
+# ─── 6. Подписки ───
 
-subs=()
-while true; do
-  read -rp "  URL подписки (Enter = готово): " url
-  [[ -z "$url" ]] && break
-  subs+=("$url")
-  echo -e "  ${G}✓${N} Добавлено"
-done
+sub_count=$(python3 -c "import json;print(len(json.load(open('$CONFIG')).get('subscriptions',[])))" 2>/dev/null || echo "0")
 
-if [[ ${#subs[@]} -gt 0 ]]; then
-  python3 -c "
+if [[ "$sub_count" == "0" ]]; then
+  echo ""
+  echo -e "  ${B}Добавь свои VPN-подписки${N}"
+  echo -e "  ${D}Вставляй ссылки по одной, пустая строка = готово${N}"
+  echo ""
+
+  subs=()
+  while true; do
+    read -rp "  URL подписки (Enter = готово): " url
+    [[ -z "$url" ]] && break
+    subs+=("$url")
+    ok "Добавлено"
+  done
+
+  if [[ ${#subs[@]} -gt 0 ]]; then
+    python3 -c "
 import json,sys
 d=json.load(open('$CONFIG'))
 d['subscriptions'] = $(printf '%s\n' "${subs[@]}" | python3 -c "import sys,json;print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))")
 json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
 "
-  echo -e "\n  ${G}✓${N} ${#subs[@]} подписок сохранено"
+    ok "${#subs[@]} подписок сохранено"
+  fi
+else
+  ok "${sub_count} подписок уже в конфиге"
 fi
 
+# ─── 7. Workers.dev поддомен ───
+
 echo ""
+step "Проверяю workers.dev поддомен..."
 
-# ─── 5. Первый деплой (bootstrap) ───
-
-echo -e "  ${B}Первый деплой...${N}"
-echo ""
-
-# Шаг 1: деплоим минимальный worker чтобы получить URL
+# Пробуем деплой минимального воркера
 cat > "$WORKER_DIR/worker.js" << 'BOOTSTRAP'
 export default {
   async fetch() {
@@ -154,58 +131,144 @@ export default {
 };
 BOOTSTRAP
 
-echo -e "  ${Y}→${N} Деплою на Cloudflare (может занять минуту)..."
 cd "$WORKER_DIR"
-npx wrangler deploy 2>&1 | tee /tmp/vpn-merge-deploy.log
-deploy_output=$(cat /tmp/vpn-merge-deploy.log)
+deploy_log="/tmp/vpn-merge-deploy-$$.log"
 
-if echo "$deploy_output" | grep -q "https://"; then
-  worker_url=$(echo "$deploy_output" | grep -o 'https://[^ ]*workers.dev' | head -1)
-  echo -e "  ${G}✓${N} Worker создан: ${worker_url}"
-else
-  echo -e "  ${R}✗${N} Ошибка деплоя. Вывод выше."
-  echo -e "  ${D}Если нужна регистрация workers.dev — откройте ссылку из вывода выше${N}"
-  exit 1
+# Первый деплой — может попросить зарегистрировать workers.dev
+npx wrangler deploy 2>&1 | tee "$deploy_log"
+deploy_output=$(cat "$deploy_log")
+
+# Если нужна регистрация workers.dev
+if echo "$deploy_output" | grep -qi "workers.dev subdomain\|register.*workers.dev\|onboarding"; then
+  register_url=$(echo "$deploy_output" | grep -o 'https://[^ ]*onboarding[^ ]*' | head -1)
+  if [[ -n "$register_url" ]]; then
+    echo ""
+    warn "Нужно зарегистрировать workers.dev поддомен"
+    step "Открываю страницу регистрации..."
+    open "$register_url" 2>/dev/null || echo -e "  Открой вручную: $register_url"
+    echo ""
+    read -rp "  Зарегистрировал? Нажми Enter для продолжения... "
+    echo ""
+    step "Повторяю деплой..."
+    npx wrangler deploy 2>&1 | tee "$deploy_log"
+    deploy_output=$(cat "$deploy_log")
+  fi
 fi
 
-# Шаг 2: сохраняем URL в конфиг (worker_urls массив)
+# Извлекаем URL
+worker_url=$(echo "$deploy_output" | grep -o 'https://[^ ]*workers.dev' | head -1)
+
+if [[ -z "$worker_url" ]]; then
+  fail "Не удалось задеплоить воркер. Смотри вывод выше."
+fi
+
+ok "Cloudflare Worker: ${worker_url}"
+
+# ─── 8. Сохраняем URL и генерируем конфиг ───
+
 python3 -c "
 import json
 d=json.load(open('$CONFIG'))
 d['worker_urls']=['${worker_url}']
 json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
 "
-echo -e "  ${G}✓${N} URL сохранён в конфиг"
+ok "URL сохранён"
 
-# Шаг 3: генерируем полный worker.js + shadowrocket.conf
-echo -e "  ${Y}→${N} Генерирую конфиг..."
+step "Генерирую конфиг и WARP-ключи..."
+cd "$SCRIPT_DIR"
 python3 "$SCRIPT_DIR/vpn-generate.py" 2>&1 | sed 's/^/  /'
 
-# Шаг 4: финальный деплой с полным worker.js
-echo -e "  ${Y}→${N} Финальный деплой..."
-cd "$WORKER_DIR"
-npx wrangler deploy 2>&1 | tee /tmp/vpn-merge-deploy.log
-deploy_output=$(cat /tmp/vpn-merge-deploy.log)
+# ─── 9. Финальный деплой ───
 
-if echo "$deploy_output" | grep -q "Deployed"; then
-  echo -e "  ${G}✓${N} Финальный деплой завершён"
+step "Финальный деплой на Cloudflare..."
+cd "$WORKER_DIR"
+npx wrangler deploy 2>&1 | tee "$deploy_log"
+
+if grep -q "Deployed" "$deploy_log"; then
+  ok "Cloudflare задеплоен"
 else
-  echo -e "  ${R}✗${N} Ошибка финального деплоя. Вывод выше."
-  exit 1
+  warn "Cloudflare деплой мог не пройти — проверь вывод выше"
 fi
+
+# ─── 10. Deno Deploy (зеркало для РФ) ───
+
+echo ""
+step "Настраиваю зеркало на Deno Deploy (работает без VPN из РФ)..."
+
+deno_dir="$SCRIPT_DIR/deno-worker"
+mkdir -p "$deno_dir"
+cp "$WORKER_DIR/deno-worker.ts" "$deno_dir/main.ts" 2>/dev/null || true
+
+if [[ -f "$deno_dir/main.ts" ]]; then
+  # Генерируем уникальное имя проекта
+  cf_name=$(echo "$worker_url" | sed 's|https://||' | sed 's|\..*||')
+  deno_app="${cf_name}-deno"
+
+  cat > "$deno_dir/deno.json" << DENOJSON
+{"deploy":{"org":"$(whoami)","app":"${deno_app}","entrypoint":"main.ts","installCommand":"echo ok"}}
+DENOJSON
+
+  # Пробуем создать и задеплоить
+  deno_log="/tmp/vpn-merge-deno-$$.log"
+
+  if DENO_DEPLOY_TOKEN="" deno deploy create \
+    --org "$(whoami)" --app "$deno_app" \
+    --source local --do-not-use-detected-build-config \
+    --install-command "echo ok" \
+    --runtime-mode dynamic --entrypoint main.ts \
+    --region global 2>&1 | tee "$deno_log"; then
+
+    deno_url=$(grep -o 'https://[^ ]*deno[^ ]*' "$deno_log" | grep -v "console\." | head -1)
+
+    if [[ -n "$deno_url" ]]; then
+      # Добавляем Deno URL в конфиг
+      python3 -c "
+import json
+d=json.load(open('$CONFIG'))
+urls=d.get('worker_urls',[])
+if '${deno_url}' not in [u for u in urls]:
+  urls.append('${deno_url}')
+  d['worker_urls']=urls
+  json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
+"
+      ok "Deno Deploy: ${deno_url}"
+    else
+      warn "Deno Deploy не настроился — можно настроить позже через ./vpn"
+    fi
+  else
+    warn "Deno Deploy пропущен (нужна авторизация — настрой позже)"
+  fi
+else
+  warn "deno-worker.ts не найден — Deno Deploy пропущен"
+fi
+
+# ─── 11. Итог ───
 
 echo ""
 echo -e "  ${D}──────────────────────────────────────────${N}"
 echo ""
 echo -e "  ${G}${B}Установка завершена!${N} 🎉"
 echo ""
+
+# Читаем все URL
 echo -e "  ${B}Твои ссылки для Shadowrocket:${N}"
-echo -e "  Конфиг     ${C}${worker_url}/conf${N}"
-echo -e "  Подписка   ${C}${worker_url}/sub${N}"
-echo -e "  Тест       ${C}${worker_url}/ping${N}"
+python3 -c "
+import json
+d=json.load(open('$CONFIG'))
+for i,u in enumerate(d.get('worker_urls',[])):
+  domain=u.replace('https://','').split('/')[0]
+  print(f'  Зеркало {i+1}: \033[36m{u}\033[0m ({domain})')
+  print(f'    /sub  — подписка')
+  print(f'    /conf — конфигурация')
+  print(f'    /ping — тест')
+" 2>/dev/null
+
 echo ""
-echo -e "  ${B}Что дальше:${N}"
-echo -e "  1. Добавь конфиг в Shadowrocket (Настройка → + → URL)"
-echo -e "  2. Добавь подписку (Главная → + → Subscribe → URL)"
-echo -e "  3. Запускай ${C}./vpn${N} для управления"
+echo -e "  ${B}Порядок настройки Shadowrocket:${N}"
+echo -e "  1. Настройка → + → вставь ссылку /conf"
+echo -e "  2. Главная → + → Subscribe → вставь ссылку /sub"
+echo -e "  3. Настройки → Тестирование URL → вставь ссылку /ping"
+echo -e "  4. Запускай ${C}./vpn${N} для управления"
 echo ""
+
+rm -f "$deploy_log" "$deno_log" 2>/dev/null

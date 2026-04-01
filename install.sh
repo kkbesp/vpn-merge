@@ -154,39 +154,43 @@ export default {
 };
 BOOTSTRAP
 
+echo -e "  ${Y}→${N} Деплою на Cloudflare (может занять минуту)..."
 cd "$WORKER_DIR"
-deploy_output=$(npx wrangler deploy 2>&1)
+npx wrangler deploy 2>&1 | tee /tmp/vpn-merge-deploy.log
+deploy_output=$(cat /tmp/vpn-merge-deploy.log)
 
-if echo "$deploy_output" | grep -q "Deployed"; then
-  worker_url=$(echo "$deploy_output" | grep "https://" | head -1 | grep -o 'https://[^ ]*')
+if echo "$deploy_output" | grep -q "https://"; then
+  worker_url=$(echo "$deploy_output" | grep -o 'https://[^ ]*workers.dev' | head -1)
   echo -e "  ${G}✓${N} Worker создан: ${worker_url}"
 else
-  echo -e "  ${R}✗${N} Ошибка деплоя:"
-  echo "$deploy_output" | tail -5
+  echo -e "  ${R}✗${N} Ошибка деплоя. Вывод выше."
+  echo -e "  ${D}Если нужна регистрация workers.dev — откройте ссылку из вывода выше${N}"
   exit 1
 fi
 
-# Шаг 2: сохраняем URL в конфиг
+# Шаг 2: сохраняем URL в конфиг (worker_urls массив)
 python3 -c "
 import json
 d=json.load(open('$CONFIG'))
-d['worker_url']='${worker_url}'
+d['worker_urls']=['${worker_url}']
 json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
 "
 echo -e "  ${G}✓${N} URL сохранён в конфиг"
 
 # Шаг 3: генерируем полный worker.js + shadowrocket.conf
+echo -e "  ${Y}→${N} Генерирую конфиг..."
 python3 "$SCRIPT_DIR/vpn-generate.py" 2>&1 | sed 's/^/  /'
 
 # Шаг 4: финальный деплой с полным worker.js
+echo -e "  ${Y}→${N} Финальный деплой..."
 cd "$WORKER_DIR"
-deploy_output=$(npx wrangler deploy 2>&1)
+npx wrangler deploy 2>&1 | tee /tmp/vpn-merge-deploy.log
+deploy_output=$(cat /tmp/vpn-merge-deploy.log)
 
 if echo "$deploy_output" | grep -q "Deployed"; then
   echo -e "  ${G}✓${N} Финальный деплой завершён"
 else
-  echo -e "  ${R}✗${N} Ошибка финального деплоя:"
-  echo "$deploy_output" | tail -5
+  echo -e "  ${R}✗${N} Ошибка финального деплоя. Вывод выше."
   exit 1
 fi
 

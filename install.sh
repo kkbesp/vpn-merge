@@ -88,125 +88,32 @@ step "Генерирую WARP-ключи и конфиг..."
 cd "$SCRIPT_DIR"
 python3 vpn-generate.py 2>&1 | sed 's/^/  /'
 
-# ─── 7. Токен Deno Deploy ───
+# ─── 7. Деплой на Deno Deploy ───
 echo ""
-deno_token=$(python3 -c "import json;print(json.load(open('$CONFIG')).get('deno_token',''))" 2>/dev/null || echo "")
-
-if [[ -z "$deno_token" ]]; then
-  echo -e "  ${B}Нужен токен Deno Deploy (бесплатно, 30 секунд):${N}"
-  echo ""
-  echo -e "  1. Открой ${C}https://dash.deno.com/account#access-tokens${N}"
-  echo -e "  2. Нажми ${B}New Access Token${N} → имя любое → ${B}Generate${N}"
-  echo -e "  3. Скопируй токен и вставь сюда"
-  echo ""
-
-  # Открываем страницу автоматически
-  open "https://dash.deno.com/account#access-tokens" 2>/dev/null || true
-
-  read -rp "  Токен: " deno_token
-  [[ -z "$deno_token" ]] && fail "Токен не введён"
-
-  # Сохраняем токен в конфиг
-  python3 -c "
-import json
-d=json.load(open('$CONFIG'))
-d['deno_token']='${deno_token}'
-json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
-"
-fi
-ok "Токен Deno Deploy"
-
-# ─── 8. Определяем org и деплоим ───
-step "Определяю аккаунт и деплою..."
-
 deno_dir="$SCRIPT_DIR/deno-worker"
 mkdir -p "$deno_dir"
 cp "$SCRIPT_DIR/worker/deno-worker.ts" "$deno_dir/main.ts"
 cd "$deno_dir"
 
-# Определяем org и деплоим одним Python-скриптом
-deno_url=$(python3 << PYEOF
-import urllib.request, json, subprocess, sys, time, random, string
+step "Деплою на Deno Deploy..."
+echo -e "  ${D}Если откроется браузер — авторизуйся. Выбирай стрелками и Enter.${N}"
+echo ""
 
-token = "${deno_token}"
-headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+# Ключевой трюк: < /dev/tty даёт deno интерактивный ввод даже из скрипта
+deno deploy create \
+  --source local \
+  --do-not-use-detected-build-config \
+  --install-command "echo ok" \
+  --runtime-mode dynamic \
+  --entrypoint main.ts \
+  --region global < /dev/tty 2>&1 | tee /tmp/vpn-deploy.log
 
-# Пробуем разные API endpoints чтобы найти org
-org = ""
-for url in [
-    "https://api.deno.com/v2/organizations",
-    "https://api.deno.com/v1/organizations",
-]:
-    try:
-        req = urllib.request.Request(url, headers=headers)
-        resp = urllib.request.urlopen(req, timeout=15)
-        data = json.loads(resp.read())
-        if isinstance(data, list) and data:
-            org = data[0].get("slug") or data[0].get("id") or ""
-        elif isinstance(data, dict):
-            items = data.get("items") or data.get("organizations") or []
-            if items:
-                org = items[0].get("slug") or items[0].get("id") or ""
-        if org:
-            break
-    except:
-        continue
+deploy_output=$(cat /tmp/vpn-deploy.log)
+deno_url=$(echo "$deploy_output" | grep -o 'https://[a-z0-9._-]*\.deno\.net' | head -1)
+[[ -z "$deno_url" ]] && deno_url=$(echo "$deploy_output" | grep -o 'https://[a-z0-9._-]*\.deno\.dev' | head -1)
+[[ -z "$deno_url" ]] && deno_url=$(echo "$deploy_output" | grep -i "production" | grep -o 'https://[^ ]*' | head -1)
 
-if not org:
-    # Пробуем через user endpoint
-    try:
-        req = urllib.request.Request("https://api.deno.com/v2/user", headers=headers)
-        resp = urllib.request.urlopen(req, timeout=15)
-        user = json.loads(resp.read())
-        org = user.get("login") or user.get("slug") or user.get("name","").lower().replace(" ","-")
-    except:
-        pass
-
-if not org:
-    print("FAIL:org", file=sys.stderr)
-    sys.exit(1)
-
-# Генерируем имя приложения
-app = f"vpn-{''.join(random.choices(string.ascii_lowercase, k=6))}"
-
-# Деплоим через CLI
-cmd = [
-    "deno", "deploy", "create",
-    "--org", org, "--app", app,
-    "--source", "local",
-    "--do-not-use-detected-build-config",
-    "--install-command", "echo ok",
-    "--runtime-mode", "dynamic",
-    "--entrypoint", "main.ts",
-    "--region", "global",
-]
-
-env = dict(__import__("os").environ)
-env["DENO_DEPLOY_TOKEN"] = token
-
-result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
-output = result.stdout + result.stderr
-
-# Ищем URL
-for line in output.split("\n"):
-    for word in line.split():
-        if ".deno.net" in word or ".deno.dev" in word:
-            url = word.strip()
-            if url.startswith("https://") and "console." not in url and "jsr." not in url:
-                print(url)
-                sys.exit(0)
-
-# Не нашли URL — выводим всё для дебага
-print(output, file=sys.stderr)
-sys.exit(1)
-PYEOF
-)
-
-if [[ -z "$deno_url" || "$deno_url" == "FAIL:"* ]]; then
-  echo ""
-  fail "Не удалось задеплоить. Проверь токен и попробуй снова: ./install.sh"
-fi
-
+[[ -z "$deno_url" ]] && fail "Не удалось задеплоить. Смотри вывод выше."
 ok "URL: ${deno_url}"
 
 # ─── 8. Перегенерация с правильным URL ───

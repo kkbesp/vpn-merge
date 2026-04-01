@@ -155,6 +155,11 @@ IP-CIDR6,2a0a:f280::/32,WARP-CHAIN,no-resolve
 DOMAIN-SUFFIX,claude.ai,PROXY
 DOMAIN-SUFFIX,anthropic.com,PROXY
 DOMAIN-SUFFIX,api.anthropic.com,PROXY
+DOMAIN-SUFFIX,gemini.google.com,PROXY
+DOMAIN-SUFFIX,generativelanguage.googleapis.com,PROXY
+DOMAIN-SUFFIX,makersuite.google.com,PROXY
+DOMAIN-SUFFIX,aistudio.google.com,PROXY
+DOMAIN-SUFFIX,deepmind.google.com,PROXY
 DOMAIN-SUFFIX,copilot.github.com,PROXY
 DOMAIN-SUFFIX,githubcopilot.com,PROXY
 DOMAIN-SUFFIX,perplexity.ai,PROXY
@@ -352,15 +357,15 @@ async function handleMerge() {{
   }});
 }}
 
-function decodeSubscription(raw) {{
+function decodeSubscription(raw: string) {{
   const trimmed = raw.trim();
   try {{
     const decoded = atob(trimmed);
     if (/^(vless|vmess|trojan|ss|ssr|hysteria2?|tuic):\\/\\//m.test(decoded))
-      return decoded.split('\\n').filter((l) => l.trim().length > 0);
+      return decoded.split('\\n').filter((l: string) => l.trim().length > 0);
   }} catch {{}}
   if (/^(vless|vmess|trojan|ss|ssr|hysteria2?|tuic):\\/\\//m.test(trimmed))
-    return trimmed.split('\\n').filter((l) => l.trim().length > 0);
+    return trimmed.split('\\n').filter((l: string) => l.trim().length > 0);
   try {{
     const json = JSON.parse(trimmed);
     if (Array.isArray(json))

@@ -6,3 +6,4 @@ deno-worker/
 node_modules/
 wgcf-*
 .wrangler/
+worker/

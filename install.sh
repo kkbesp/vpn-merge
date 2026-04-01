@@ -88,18 +88,84 @@ step "Генерирую WARP-ключи и конфиг..."
 cd "$SCRIPT_DIR"
 python3 vpn-generate.py 2>&1 | sed 's/^/  /'
 
-# ─── 7. Деплой на Deno ───
+# ─── 7. Токен Deno Deploy ───
 echo ""
-step "Деплою на Deno Deploy..."
-step "Если откроется браузер — просто авторизуйся"
+deno_token=$(python3 -c "import json;print(json.load(open('$CONFIG')).get('deno_token',''))" 2>/dev/null || echo "")
+
+if [[ -z "$deno_token" ]]; then
+  echo -e "  ${B}Нужен токен Deno Deploy (бесплатно, 30 секунд):${N}"
+  echo ""
+  echo -e "  1. Открой ${C}https://dash.deno.com/account#access-tokens${N}"
+  echo -e "  2. Нажми ${B}New Access Token${N} → имя любое → ${B}Generate${N}"
+  echo -e "  3. Скопируй токен и вставь сюда"
+  echo ""
+
+  # Открываем страницу автоматически
+  open "https://dash.deno.com/account#access-tokens" 2>/dev/null || true
+
+  read -rp "  Токен: " deno_token
+  [[ -z "$deno_token" ]] && fail "Токен не введён"
+
+  # Сохраняем токен в конфиг
+  python3 -c "
+import json
+d=json.load(open('$CONFIG'))
+d['deno_token']='${deno_token}'
+json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
+"
+fi
+ok "Токен Deno Deploy"
+
+# ─── 8. Определяем org через API ───
+step "Определяю аккаунт..."
+
+deno_org=$(python3 -c "
+import urllib.request, json
+req = urllib.request.Request('https://api.deno.com/v2/organizations',
+  headers={'Authorization': 'Bearer ${deno_token}'})
+try:
+  resp = urllib.request.urlopen(req, timeout=10)
+  orgs = json.loads(resp.read())
+  if orgs: print(orgs[0].get('slug') or orgs[0].get('id',''))
+except: pass
+" 2>/dev/null || echo "")
+
+if [[ -z "$deno_org" ]]; then
+  # Новый Deno Deploy может использовать другой API
+  deno_org=$(python3 -c "
+import urllib.request, json
+req = urllib.request.Request('https://api.deno.com/v1/organizations',
+  headers={'Authorization': 'Bearer ${deno_token}'})
+try:
+  resp = urllib.request.urlopen(req, timeout=10)
+  orgs = json.loads(resp.read())
+  if isinstance(orgs, list) and orgs: print(orgs[0].get('slug') or orgs[0].get('name','').lower().replace(' ','-'))
+  elif isinstance(orgs, dict) and orgs.get('items'): print(orgs['items'][0].get('slug',''))
+except: pass
+" 2>/dev/null || echo "")
+fi
+
+if [[ -z "$deno_org" ]]; then
+  # Последний вариант — берём из whoami
+  deno_org=$(DENO_DEPLOY_TOKEN="$deno_token" deno deploy 2>&1 | grep -i "org" | head -1 | grep -o '[a-z0-9_-]*' | tail -1 || echo "")
+fi
+
+[[ -z "$deno_org" ]] && fail "Не удалось определить организацию Deno Deploy"
+ok "Организация: ${deno_org}"
+
+# ─── 9. Деплой ───
+step "Деплою..."
 
 deno_dir="$SCRIPT_DIR/deno-worker"
 mkdir -p "$deno_dir"
 cp "$SCRIPT_DIR/worker/deno-worker.ts" "$deno_dir/main.ts"
 cd "$deno_dir"
 
-# Запускаем полностью интерактивно — deno сам спросит всё что нужно
-deno deploy create \
+app_name="vpn-$(echo "$deno_org" | head -c 10)-$(date +%s | tail -c 4)"
+
+DENO_DEPLOY_TOKEN="$deno_token" deno deploy create \
+  --org "$deno_org" \
+  --app "$app_name" \
   --source local \
   --do-not-use-detected-build-config \
   --install-command "echo ok" \
@@ -112,11 +178,7 @@ deno_url=$(echo "$deploy_output" | grep -o 'https://[a-z0-9._-]*\.deno\.net' | h
 [[ -z "$deno_url" ]] && deno_url=$(echo "$deploy_output" | grep -o 'https://[a-z0-9._-]*\.deno\.dev' | head -1)
 [[ -z "$deno_url" ]] && deno_url=$(echo "$deploy_output" | grep -i "production" | grep -o 'https://[^ ]*' | head -1)
 
-if [[ -z "$deno_url" ]]; then
-  echo ""
-  fail "Не удалось получить URL. Смотри вывод выше."
-fi
-
+[[ -z "$deno_url" ]] && fail "Не удалось задеплоить. Смотри вывод выше."
 ok "URL: ${deno_url}"
 
 # ─── 8. Перегенерация с правильным URL ───

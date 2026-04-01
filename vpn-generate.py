@@ -326,7 +326,6 @@ async function handleMerge() {{
     headers: {{
       'Content-Type': 'text/plain; charset=utf-8',
       'Cache-Control': 'no-cache',
-      'Subscription-Userinfo': `total=${{unique.length}}`,
       'Profile-Update-Interval': '6',
     }},
   }});

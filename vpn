@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG="$SCRIPT_DIR/vpn-config.json"
 GENERATOR="$SCRIPT_DIR/vpn-generate.py"
 WORKER_DIR="$SCRIPT_DIR/worker"
+DENO_DIR="$SCRIPT_DIR/deno-worker"
 
 G='\033[32m' R='\033[31m' Y='\033[33m' C='\033[36m' M='\033[35m'
 B='\033[1m' D='\033[2m' N='\033[0m'
@@ -286,50 +287,36 @@ deploy() {
   stop_spin
   echo "$gen_output" | while read -r line; do echo "  $line"; done
 
-  # Cloudflare
-  start_spin "Деплою на Cloudflare..."
-  local cf_output
-  cf_output=$(cd "$WORKER_DIR" && npx wrangler deploy 2>&1)
-  stop_spin
-  if echo "$cf_output" | grep -q "Deployed"; then
-    echo -e "  ${G}✓${N} Cloudflare задеплоен"
-  else
-    echo -e "  ${Y}⚠${N} Cloudflare: ошибка (${D}$(echo "$cf_output" | tail -1)${N})"
-  fi
-
   # Deno Deploy
-  local deno_dir="$SCRIPT_DIR/deno-worker"
   if [[ -f "$WORKER_DIR/deno-worker.ts" ]]; then
-    start_spin "Деплою на Deno Deploy..."
-    mkdir -p "$deno_dir"
-    cp "$WORKER_DIR/deno-worker.ts" "$deno_dir/main.ts"
-    # Читаем deno app name из конфига
-    local deno_app=$(python3 -c "import json;d=json.load(open('$CONFIG'));urls=d.get('worker_urls',[]);print(next((u.split('//')[1].split('.')[0] for u in urls if 'deno' in u),''))" 2>/dev/null)
-    local deno_org=$(python3 -c "import json;d=json.load(open('$CONFIG'));urls=d.get('worker_urls',[]);u=next((u for u in urls if 'deno' in u),'');parts=u.replace('https://','').split('.');print(parts[1] if len(parts)>2 else '')" 2>/dev/null)
-    if [[ -n "$deno_app" && -n "$deno_org" ]]; then
-      cat > "$deno_dir/deno.json" << DENOJSON
-{"deploy":{"org":"${deno_org}","app":"${deno_app}","entrypoint":"main.ts"}}
-DENOJSON
-      local deno_token=$(python3 -c "import json;print(json.load(open('$CONFIG')).get('deno_token',''))" 2>/dev/null)
+    mkdir -p "$DENO_DIR"
+    cp "$WORKER_DIR/deno-worker.ts" "$DENO_DIR/main.ts"
+
+    local deno_app=$(python3 -c "
+import json;d=json.load(open('$CONFIG'))
+urls=d.get('worker_urls',[])
+for u in urls:
+  if 'deno' in u:
+    print(u.replace('https://','').split('.')[0])
+    break
+" 2>/dev/null)
+
+    if [[ -n "$deno_app" ]]; then
+      start_spin "Деплою на Deno Deploy..."
       local deno_output
-      if [[ -n "$deno_token" ]]; then
-        deno_output=$(cd "$deno_dir" && DENO_DEPLOY_TOKEN="$deno_token" deno deploy --prod 2>&1)
-      else
-        deno_output=$(cd "$deno_dir" && deno deploy --prod 2>&1)
-      fi
+      deno_output=$(cd "$DENO_DIR" && deno deploy --app "$deno_app" --prod 2>&1)
       stop_spin
       if echo "$deno_output" | grep -q "Successfully deployed"; then
         echo -e "  ${G}✓${N} Deno Deploy задеплоен"
       else
-        echo -e "  ${Y}⚠${N} Deno: ошибка (${D}$(echo "$deno_output" | grep -i "error\|fail" | tail -1)${N})"
+        echo -e "  ${Y}⚠${N} Deno: $(echo "$deno_output" | grep -i "error\|fail\|✗" | tail -1)"
       fi
     else
-      stop_spin
-      echo -e "  ${D}  Deno Deploy не настроен${N}"
+      echo -e "  ${Y}⚠${N} Deno Deploy не настроен (запусти ./install.sh)"
     fi
   fi
 
-  # Проверка зеркал
+  # Проверка
   sleep 3
   echo ""
   echo "$WORKER_URLS" | while read -r wurl; do

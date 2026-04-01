@@ -304,24 +304,50 @@ async function handleMerge() {{
   const allNodes = [];
   const results = await Promise.allSettled(
     SUBSCRIPTIONS.map(async (subUrl) => {{
-      const res = await fetch(subUrl, {{
-        headers: {{
-          'User-Agent': 'Shadowrocket/2070 CFNetwork/1568.100.1',
-          'Accept-Encoding': 'identity',
-        }},
-        redirect: 'follow',
-      }});
-      if (!res.ok) return [];
-      const text = await res.text();
-      if (!text || text.trim().length === 0) return [];
-      return decodeSubscription(text);
+      try {{
+        const res = await fetch(subUrl, {{
+          headers: {{
+            'User-Agent': 'Shadowrocket/2070 CFNetwork/1568.100.1',
+          }},
+          redirect: 'follow',
+        }});
+        if (!res.ok) return [];
+
+        // Попробуем как text, если gzip — CF Workers декомпрессит автоматически
+        let text;
+        try {{
+          text = await res.text();
+        }} catch {{
+          // Если text() не сработал — читаем как arrayBuffer и декодируем
+          const buf = await res.arrayBuffer();
+          text = new TextDecoder().decode(buf);
+        }}
+
+        if (!text || text.trim().length === 0) return [];
+        return decodeSubscription(text);
+      }} catch {{
+        return [];
+      }}
     }}),
   );
   for (const result of results) {{
     if (result.status === 'fulfilled') allNodes.push(...result.value);
   }}
   const unique = [...new Set(allNodes)].filter((l) => l.trim().length > 0);
-  const merged = btoa(unique.join('\\n'));
+
+  // Кодируем в base64, безопасно для UTF-8 (binary string → btoa)
+  const raw = unique.join('\\n');
+  let merged;
+  try {{
+    merged = btoa(raw);
+  }} catch {{
+    // Если btoa не справился с Unicode — кодируем через UTF-8
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(raw);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    merged = btoa(bin);
+  }}
   return new Response(merged, {{
     headers: {{
       'Content-Type': 'text/plain; charset=utf-8',

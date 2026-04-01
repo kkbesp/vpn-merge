@@ -29,6 +29,19 @@ check() {
 
 echo -e "  ${B}Проверяю зависимости...${N}"
 
+# Homebrew
+if ! check brew; then
+  echo -e "  ${Y}→${N} Устанавливаю Homebrew..."
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  # Добавляем в PATH для текущей сессии
+  if [[ -f /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  elif [[ -f /usr/local/bin/brew ]]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+  fi
+  echo -e "  ${G}✓${N} Homebrew установлен"
+fi
+
 check python3 || { echo -e "  ${R}Установи python3${N}"; exit 1; }
 check curl || { echo -e "  ${R}Установи curl${N}"; exit 1; }
 
@@ -43,6 +56,12 @@ if ! check wrangler && ! npx wrangler --version &>/dev/null 2>&1; then
   mkdir -p "$WORKER_DIR"
   cd "$WORKER_DIR" && npm install wrangler --save-dev
   echo -e "  ${G}✓${N} wrangler установлен"
+fi
+
+if ! check deno; then
+  echo -e "  ${Y}→${N} Устанавливаю Deno..."
+  brew install deno
+  echo -e "  ${G}✓${N} Deno установлен"
 fi
 
 echo ""

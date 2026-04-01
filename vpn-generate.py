@@ -320,7 +320,11 @@ async function handleMerge() {{
   for (const result of results) {{
     if (result.status === 'fulfilled') allNodes.push(...result.value);
   }}
-  const unique = [...new Set(allNodes)].filter((l) => l.trim().length > 0);
+  // Фильтруем дубликаты и неподдерживаемые транспорты (xhttp крашит SR на macOS)
+  const unsupported = ['type=xhttp'];
+  const unique = [...new Set(allNodes)]
+    .filter((l) => l.trim().length > 0)
+    .filter((l) => !unsupported.some((u) => l.includes(u)));
   const merged = btoa(unique.join('\\n'));
   return new Response(merged, {{
     headers: {{

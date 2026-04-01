@@ -1,6 +1,8 @@
 vpn-config.json
 shadowrocket.conf
 worker.js
+deno-worker.ts
+deno-worker/
 node_modules/
 wgcf-*
 .wrangler/

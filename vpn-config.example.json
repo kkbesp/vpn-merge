@@ -1,5 +1,5 @@
 {
-  "worker_url": "",
+  "worker_urls": [],
   "subscriptions": [],
   "ping_targets": [
     "https://api.telegram.org/",

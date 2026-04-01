@@ -15,13 +15,20 @@ worker_path = script_dir / "worker" / "worker.js"
 
 config = json.load(open(config_path))
 
-worker_url = config.get("worker_url", "")
+# Поддержка worker_urls (массив) и worker_url (строка, обратная совместимость)
+worker_urls = config.get("worker_urls", [])
+if not worker_urls:
+    legacy = config.get("worker_url", "")
+    if legacy:
+        worker_urls = [legacy]
+worker_url = worker_urls[0] if worker_urls else ""
+
 subs = config["subscriptions"]
 pings = config["ping_targets"]
 warp_domains = config.get("warp_domains", [])
 
 if not worker_url:
-    print("✗ worker_url не задан в vpn-config.json. Запусти ./install.sh")
+    print("✗ worker_urls не задан в vpn-config.json. Запусти ./install.sh")
     exit(1)
 
 
@@ -304,30 +311,18 @@ async function handleMerge() {{
   const allNodes = [];
   const results = await Promise.allSettled(
     SUBSCRIPTIONS.map(async (subUrl) => {{
-      try {{
-        const res = await fetch(subUrl, {{
-          headers: {{
-            'User-Agent': 'Shadowrocket/2070 CFNetwork/1568.100.1',
-          }},
-          redirect: 'follow',
-        }});
-        if (!res.ok) return [];
-
-        // Попробуем как text, если gzip — CF Workers декомпрессит автоматически
-        let text;
-        try {{
-          text = await res.text();
-        }} catch {{
-          // Если text() не сработал — читаем как arrayBuffer и декодируем
-          const buf = await res.arrayBuffer();
-          text = new TextDecoder().decode(buf);
-        }}
-
-        if (!text || text.trim().length === 0) return [];
-        return decodeSubscription(text);
-      }} catch {{
-        return [];
-      }}
+      const res = await fetch(subUrl, {{
+        headers: {{
+          'User-Agent': 'Happ/1.0',
+          'X-HWID': 'vpn-merge',
+          'Accept-Encoding': 'identity',
+        }},
+        redirect: 'follow',
+      }});
+      if (!res.ok) return [];
+      const text = await res.text();
+      if (!text || text.trim().length === 0) return [];
+      return decodeSubscription(text);
     }}),
   );
   for (const result of results) {{
@@ -379,3 +374,20 @@ function decodeSubscription(raw) {{
 worker_path.parent.mkdir(parents=True, exist_ok=True)
 worker_path.write_text(worker)
 print(f"✓ worker.js ({len(subs)} подписок, {len(pings)} пинг-таргетов)")
+
+# ─── Генерация deno-worker.ts ───
+
+deno_worker_path = script_dir / "worker" / "deno-worker.ts"
+
+# Читаем сгенерированный worker.js и заменяем точку входа
+worker_js = worker_path.read_text()
+deno_js = worker_js.replace(
+    "export default {\n  async fetch(request) {",
+    "async function handler(request: Request): Promise<Response> {"
+).replace(
+    "    return new Response('Not found', { status: 404 });\n  },\n};",
+    "    return new Response('Not found', { status: 404 });\n}\n\nDeno.serve(handler);"
+)
+
+deno_worker_path.write_text(deno_js)
+print("✓ deno-worker.ts")

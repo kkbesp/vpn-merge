@@ -116,35 +116,18 @@ cp "$SCRIPT_DIR/worker/deno-worker.ts" "$deno_dir/main.ts"
 # Деплой
 deploy_log="/tmp/vpn-merge-deploy-$$.log"
 
-# Определяем org slug — авторизация откроет браузер если нужно
-step "Определяю аккаунт Deno Deploy..."
+# Просто запускаем create интерактивно — Deno сам всё спросит
+step "Создаю приложение на Deno Deploy..."
+step "Если откроется браузер — авторизуйся и вернись сюда"
 cd "$deno_dir"
 
-# Пробуем получить org из `deno deploy` (при первом запуске откроется браузер)
-deno_org=$(deno deploy switch 2>&1 | grep -o '[a-z0-9_-]*' | head -1 || true)
-
-if [[ -z "$deno_org" ]]; then
-  # Если switch не дал org — запускаем create интерактивно, он сам спросит
-  step "Создаю приложение (откроется браузер для авторизации)..."
-  deno deploy create \
-    --source local \
-    --do-not-use-detected-build-config \
-    --install-command "echo ok" \
-    --runtime-mode dynamic \
-    --entrypoint main.ts \
-    --region global 2>&1 | tee "$deploy_log"
-else
-  step "Создаю приложение в ${deno_org}..."
-  deno deploy create \
-    --org "$deno_org" \
-    --app "$app_name" \
-    --source local \
-    --do-not-use-detected-build-config \
-    --install-command "echo ok" \
-    --runtime-mode dynamic \
-    --entrypoint main.ts \
-    --region global 2>&1 | tee "$deploy_log"
-fi
+deno deploy create \
+  --source local \
+  --do-not-use-detected-build-config \
+  --install-command "echo ok" \
+  --runtime-mode dynamic \
+  --entrypoint main.ts \
+  --region global 2>&1 | tee "$deploy_log"
 
 deploy_output=$(cat "$deploy_log")
 

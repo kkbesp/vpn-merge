@@ -139,8 +139,8 @@ npx wrangler deploy 2>&1 | tee "$deploy_log"
 deploy_output=$(cat "$deploy_log")
 
 # Если нужна регистрация workers.dev
-if echo "$deploy_output" | grep -qi "workers.dev subdomain\|register.*workers.dev\|onboarding"; then
-  register_url=$(echo "$deploy_output" | grep -o 'https://[^ ]*onboarding[^ ]*' | head -1)
+if echo "$deploy_output" | grep -qi "workers.dev subdomain\|register.*workers.dev\|onboarding\|deploy your worker to one or more routes"; then
+  register_url=$(echo "$deploy_output" | grep -o 'https://dash.cloudflare.com/[^ ]*' | head -1)
   if [[ -n "$register_url" ]]; then
     echo ""
     warn "Нужно зарегистрировать workers.dev поддомен"

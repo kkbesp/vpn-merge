@@ -138,59 +138,67 @@ deploy_log="/tmp/vpn-merge-deploy-$$.log"
 npx wrangler deploy 2>&1 | tee "$deploy_log"
 deploy_output=$(cat "$deploy_log")
 
-# Если нужна регистрация workers.dev — регистрируем автоматически через API
+# Если нужна регистрация workers.dev — создаём dummy через wrangler
 if echo "$deploy_output" | grep -qi "workers.dev subdomain\|register.*workers.dev\|onboarding\|deploy your worker to one or more routes"; then
-  step "Регистрирую workers.dev поддомен..."
+  step "Регистрирую workers.dev поддомен автоматически..."
 
-  # Получаем account_id из вывода
-  account_id=$(echo "$deploy_output" | grep -o 'https://dash.cloudflare.com/[^/]*' | head -1 | sed 's|.*/||')
+  # Получаем account_id
+  account_id=$(echo "$deploy_output" | grep -o '[a-f0-9]\{32\}' | head -1)
+  [[ -z "$account_id" ]] && account_id=$(npx wrangler whoami 2>&1 | grep -o '[a-f0-9]\{32\}' | head -1)
 
-  if [[ -z "$account_id" ]]; then
-    # Получаем через wrangler whoami
-    account_id=$(npx wrangler whoami 2>&1 | grep -o '[a-f0-9]\{32\}' | head -1)
+  # Регистрируем поддомен через Cloudflare API
+  subdomain_name=$(whoami | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | head -c 15)
+
+  # Получаем OAuth токен из wrangler config
+  cf_token=""
+  wrangler_config="$HOME/.wrangler/config/default.toml"
+  [[ -f "$wrangler_config" ]] && cf_token=$(grep -o 'oauth_token = "[^"]*"' "$wrangler_config" | sed 's/oauth_token = "//;s/"//' || true)
+
+  # Альтернативный путь к конфигу
+  if [[ -z "$cf_token" ]]; then
+    for f in "$HOME"/.wrangler/config/*.toml "$HOME"/Library/Preferences/.wrangler/config/*.toml; do
+      [[ -f "$f" ]] && cf_token=$(grep -o 'oauth_token = "[^"]*"' "$f" 2>/dev/null | sed 's/oauth_token = "//;s/"//' || true)
+      [[ -n "$cf_token" ]] && break
+    done
   fi
 
-  if [[ -n "$account_id" ]]; then
-    # Генерируем имя поддомена из username
-    subdomain_name=$(whoami | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | head -c 20)
-    subdomain_name="${subdomain_name}-vpn"
+  if [[ -n "$cf_token" && -n "$account_id" ]]; then
+    # Регистрируем поддомен через API
+    curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/${account_id}/workers/subdomain" \
+      -H "Authorization: Bearer ${cf_token}" \
+      -H "Content-Type: application/json" \
+      -d "{\"subdomain\":\"${subdomain_name}\"}" > /dev/null 2>&1
 
-    # Получаем API токен из wrangler
-    cf_token=$(npx wrangler whoami 2>&1 | head -1 || true)
-
-    # Регистрируем через wrangler API (пробуем несколько раз)
-    step "Регистрирую поддомен ${subdomain_name}.workers.dev..."
-
-    # Используем wrangler dispatch — он сам зарегистрирует при повторном деплое
-    # Просто подождём и попробуем ещё раз
     sleep 3
+    step "Повторяю деплой..."
     npx wrangler deploy 2>&1 | tee "$deploy_log"
     deploy_output=$(cat "$deploy_log")
-
-    if ! echo "$deploy_output" | grep -q "https://"; then
-      # Ещё раз — иногда CF нужно время
-      sleep 5
-      step "Повторяю деплой..."
-      npx wrangler deploy 2>&1 | tee "$deploy_log"
-      deploy_output=$(cat "$deploy_log")
-    fi
   fi
 
-  # Если всё ещё не работает — просим юзера вручную
+  # Если API не сработал — пробуем через wrangler init + deploy трюк
   if ! echo "$deploy_output" | grep -q "https://"; then
-    echo ""
-    warn "Cloudflare требует ручную регистрацию workers.dev"
-    register_url="https://dash.cloudflare.com/${account_id}/workers-and-pages"
-    step "Открываю дашборд..."
-    open "$register_url" 2>/dev/null || true
-    echo ""
-    echo -e "  1. Зайди в ${C}Workers & Pages${N}"
-    echo -e "  2. Нажми ${C}Create${N} → ${C}Create Worker${N} → ${C}Deploy${N}"
-    echo -e "  3. Это создаст workers.dev поддомен"
-    echo -e "  4. Удали созданный воркер (он не нужен)"
-    echo ""
-    read -rp "  Готово? Нажми Enter... "
+    step "Альтернативный способ регистрации..."
+    tmp_worker=$(mktemp -d)
+    cat > "$tmp_worker/wrangler.toml" << TMPTOML
+name = "init-subdomain"
+main = "index.js"
+compatibility_date = "2024-01-01"
+workers_dev = true
+TMPTOML
+    echo 'export default{async fetch(){return new Response("ok")}}' > "$tmp_worker/index.js"
+    (cd "$tmp_worker" && npx wrangler deploy 2>&1) || true
+    (cd "$tmp_worker" && npx wrangler delete --name init-subdomain -f 2>&1) || true
+    rm -rf "$tmp_worker"
+
+    sleep 3
     step "Повторяю деплой..."
+    npx wrangler deploy 2>&1 | tee "$deploy_log"
+    deploy_output=$(cat "$deploy_log")
+  fi
+
+  # Последняя попытка
+  if ! echo "$deploy_output" | grep -q "https://"; then
+    sleep 5
     npx wrangler deploy 2>&1 | tee "$deploy_log"
     deploy_output=$(cat "$deploy_log")
   fi

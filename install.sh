@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail
 
 G='\033[32m' R='\033[31m' Y='\033[33m' C='\033[36m'
 B='\033[1m' D='\033[2m' N='\033[0m'
@@ -55,7 +55,7 @@ if [[ "$sub_count" == "0" ]]; then
   echo ""
   subs=()
   while true; do
-    read -rp "  URL (Enter = готово): " url
+    read -rp "  URL (Enter = готово): " url < /dev/tty
     [[ -z "$url" ]] && break
     subs+=("$url")
     ok "Добавлено"
@@ -86,7 +86,7 @@ if not d.get('worker_urls') or d['worker_urls']==['']:
 echo ""
 step "Генерирую WARP-ключи и конфиг..."
 cd "$SCRIPT_DIR"
-python3 vpn-generate.py 2>&1 | sed 's/^/  /'
+python3 vpn-generate.py 2>&1 | sed 's/^/  /' || true
 
 # ─── 7. Деплой на Deno Deploy ───
 echo ""
@@ -126,7 +126,7 @@ json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
 "
 
 cd "$SCRIPT_DIR"
-python3 vpn-generate.py > /dev/null 2>&1
+python3 vpn-generate.py > /dev/null 2>&1 || true
 cp "$SCRIPT_DIR/worker/deno-worker.ts" "$deno_dir/main.ts"
 
 # Извлекаем app name из URL
@@ -134,15 +134,15 @@ deno_app=$(echo "$deno_url" | sed 's|https://||' | cut -d. -f1)
 
 step "Финальный деплой..."
 cd "$deno_dir"
-deno deploy --app "$deno_app" --prod 2>&1 | tee /tmp/vpn-deploy.log
+deno deploy --app "$deno_app" --prod < /dev/tty 2>&1 | tee /tmp/vpn-deploy.log || true
 
-if grep -q "Successfully deployed" /tmp/vpn-deploy.log; then
-  ok "Задеплоено"
-else
+if ! grep -q "Successfully deployed" /tmp/vpn-deploy.log; then
   step "Повторяю..."
   sleep 3
-  deno deploy --app "$deno_app" --prod 2>&1 | tee /tmp/vpn-deploy.log
+  deno deploy --app "$deno_app" --prod < /dev/tty 2>&1 | tee /tmp/vpn-deploy.log || true
 fi
+
+grep -q "Successfully deployed" /tmp/vpn-deploy.log && ok "Задеплоено" || echo -e "  ${Y}⚠${N} Проверь вывод выше"
 
 # ─── 9. Проверка ───
 echo ""

@@ -110,38 +110,52 @@ fi
 
 echo ""
 
-# ─── 5. Первый деплой ───
+# ─── 5. Первый деплой (bootstrap) ───
 
 echo -e "  ${B}Первый деплой...${N}"
 echo ""
 
-# Генерируем worker.js
-python3 "$SCRIPT_DIR/vpn-generate.py" 2>&1 | sed 's/^/  /'
+# Шаг 1: деплоим минимальный worker чтобы получить URL
+cat > "$WORKER_DIR/worker.js" << 'BOOTSTRAP'
+export default {
+  async fetch() {
+    return new Response('Setting up...', { status: 200 });
+  },
+};
+BOOTSTRAP
 
-# Деплоим
 cd "$WORKER_DIR"
 deploy_output=$(npx wrangler deploy 2>&1)
 
 if echo "$deploy_output" | grep -q "Deployed"; then
-  # Извлекаем URL
   worker_url=$(echo "$deploy_output" | grep "https://" | head -1 | grep -o 'https://[^ ]*')
-  echo -e "  ${G}✓${N} Задеплоено: ${worker_url}"
+  echo -e "  ${G}✓${N} Worker создан: ${worker_url}"
+else
+  echo -e "  ${R}✗${N} Ошибка деплоя:"
+  echo "$deploy_output" | tail -5
+  exit 1
+fi
 
-  # Сохраняем URL в конфиг
-  python3 -c "
+# Шаг 2: сохраняем URL в конфиг
+python3 -c "
 import json
 d=json.load(open('$CONFIG'))
 d['worker_url']='${worker_url}'
 json.dump(d,open('$CONFIG','w'),indent=2,ensure_ascii=False)
 "
+echo -e "  ${G}✓${N} URL сохранён в конфиг"
 
-  # Перегенерируем с правильным URL
-  python3 "$SCRIPT_DIR/vpn-generate.py" > /dev/null 2>&1
-  cd "$WORKER_DIR" && npx wrangler deploy > /dev/null 2>&1
+# Шаг 3: генерируем полный worker.js + shadowrocket.conf
+python3 "$SCRIPT_DIR/vpn-generate.py" 2>&1 | sed 's/^/  /'
 
-  echo -e "  ${G}✓${N} Конфиг обновлён с URL"
+# Шаг 4: финальный деплой с полным worker.js
+cd "$WORKER_DIR"
+deploy_output=$(npx wrangler deploy 2>&1)
+
+if echo "$deploy_output" | grep -q "Deployed"; then
+  echo -e "  ${G}✓${N} Финальный деплой завершён"
 else
-  echo -e "  ${R}✗${N} Ошибка деплоя:"
+  echo -e "  ${R}✗${N} Ошибка финального деплоя:"
   echo "$deploy_output" | tail -5
   exit 1
 fi

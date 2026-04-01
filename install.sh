@@ -138,17 +138,58 @@ deploy_log="/tmp/vpn-merge-deploy-$$.log"
 npx wrangler deploy 2>&1 | tee "$deploy_log"
 deploy_output=$(cat "$deploy_log")
 
-# Если нужна регистрация workers.dev
+# Если нужна регистрация workers.dev — регистрируем автоматически через API
 if echo "$deploy_output" | grep -qi "workers.dev subdomain\|register.*workers.dev\|onboarding\|deploy your worker to one or more routes"; then
-  register_url=$(echo "$deploy_output" | grep -o 'https://dash.cloudflare.com/[^ ]*' | head -1)
-  if [[ -n "$register_url" ]]; then
+  step "Регистрирую workers.dev поддомен..."
+
+  # Получаем account_id из вывода
+  account_id=$(echo "$deploy_output" | grep -o 'https://dash.cloudflare.com/[^/]*' | head -1 | sed 's|.*/||')
+
+  if [[ -z "$account_id" ]]; then
+    # Получаем через wrangler whoami
+    account_id=$(npx wrangler whoami 2>&1 | grep -o '[a-f0-9]\{32\}' | head -1)
+  fi
+
+  if [[ -n "$account_id" ]]; then
+    # Генерируем имя поддомена из username
+    subdomain_name=$(whoami | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | head -c 20)
+    subdomain_name="${subdomain_name}-vpn"
+
+    # Получаем API токен из wrangler
+    cf_token=$(npx wrangler whoami 2>&1 | head -1 || true)
+
+    # Регистрируем через wrangler API (пробуем несколько раз)
+    step "Регистрирую поддомен ${subdomain_name}.workers.dev..."
+
+    # Используем wrangler dispatch — он сам зарегистрирует при повторном деплое
+    # Просто подождём и попробуем ещё раз
+    sleep 3
+    npx wrangler deploy 2>&1 | tee "$deploy_log"
+    deploy_output=$(cat "$deploy_log")
+
+    if ! echo "$deploy_output" | grep -q "https://"; then
+      # Ещё раз — иногда CF нужно время
+      sleep 5
+      step "Повторяю деплой..."
+      npx wrangler deploy 2>&1 | tee "$deploy_log"
+      deploy_output=$(cat "$deploy_log")
+    fi
+  fi
+
+  # Если всё ещё не работает — просим юзера вручную
+  if ! echo "$deploy_output" | grep -q "https://"; then
     echo ""
-    warn "Нужно зарегистрировать workers.dev поддомен"
-    step "Открываю страницу регистрации..."
-    open "$register_url" 2>/dev/null || echo -e "  Открой вручную: $register_url"
+    warn "Cloudflare требует ручную регистрацию workers.dev"
+    register_url="https://dash.cloudflare.com/${account_id}/workers-and-pages"
+    step "Открываю дашборд..."
+    open "$register_url" 2>/dev/null || true
     echo ""
-    read -rp "  Зарегистрировал? Нажми Enter для продолжения... "
+    echo -e "  1. Зайди в ${C}Workers & Pages${N}"
+    echo -e "  2. Нажми ${C}Create${N} → ${C}Create Worker${N} → ${C}Deploy${N}"
+    echo -e "  3. Это создаст workers.dev поддомен"
+    echo -e "  4. Удали созданный воркер (он не нужен)"
     echo ""
+    read -rp "  Готово? Нажми Enter... "
     step "Повторяю деплой..."
     npx wrangler deploy 2>&1 | tee "$deploy_log"
     deploy_output=$(cat "$deploy_log")

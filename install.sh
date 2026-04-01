@@ -29,11 +29,16 @@ check() {
 
 echo -e "  ${B}Проверяю зависимости...${N}"
 
-# Homebrew
+# Homebrew — добавляем в PATH (может быть установлен но не в PATH)
+if [[ -f /opt/homebrew/bin/brew ]]; then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+elif [[ -f /usr/local/bin/brew ]]; then
+  eval "$(/usr/local/bin/brew shellenv)"
+fi
+
 if ! check brew; then
   echo -e "  ${Y}→${N} Устанавливаю Homebrew..."
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  # Добавляем в PATH для текущей сессии
   if [[ -f /opt/homebrew/bin/brew ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
   elif [[ -f /usr/local/bin/brew ]]; then

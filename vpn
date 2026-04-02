@@ -228,6 +228,8 @@ add_ping() {
   echo ""
   echo -e "  ${D}Примеры: https://t.me/  https://claude.ai/api/health${N}"
   read -rp "  URL: " url; [[ -z "$url" ]] && return
+  # Авто-добавляем https:// если нет протокола
+  [[ "$url" != http* ]] && url="https://${url}/"
   python3 -c "
 import json;d=json.load(open('$CONFIG'))
 d['ping_targets'].append('''$url''')
